@@ -1,15 +1,80 @@
+pcall(function()
+    local function innerLog(err, trace)
+        _G.jdkLastErrors = _G.jdkLastErrors or {}
+        local errKey = tostring(err) .. tostring(trace)
+        if _G.jdkLastErrors[errKey] and tick() - _G.jdkLastErrors[errKey] < 5 then
+            return
+        end
+        _G.jdkLastErrors[errKey] = tick()
+        local filename = "jdkclient_crash_log.txt"
+        local existing = ""
+        pcall(function()
+            if isfile and isfile(filename) then
+                existing = readfile(filename)
+            end
+        end)
+        if string.len(existing) > 100000 then
+            existing = "[Log truncated due to size]\n"
+        end
+        local timeStr = "unknown time"
+        pcall(function()
+            timeStr = os.date("%Y-%m-%d %H:%M:%S")
+        end)
+        local newLog = string.format("[%s] Error: %s\nTrace: %s\n\n", timeStr, tostring(err), tostring(trace or "No traceback"))
+        pcall(function()
+            if writefile then
+                writefile(filename, existing .. newLog)
+            end
+        end)
+    end
+    game:GetService("LogService").MessageOut:Connect(function(message, messageType)
+        if messageType == Enum.MessageType.MessageError then
+            innerLog(message, "LogService")
+        end
+    end)
+    game:GetService("ScriptContext").Error:Connect(function(message, stackTrace, scriptInstance)
+        local scriptName = scriptInstance and scriptInstance:GetFullName() or "Unknown Script"
+        innerLog(message, "Script: " .. scriptName .. "\nStack:\n" .. stackTrace)
+    end)
+end)
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+players = game:GetService("Players")
+plr = players.LocalPlayer
+while not plr do
+    task.wait(0.1)
+    plr = players.LocalPlayer
+end
+cam = workspace.CurrentCamera
+while not cam do
+    task.wait(0.1)
+    cam = workspace.CurrentCamera
+end
+plr:WaitForChild("PlayerGui", 20)
+rep = game:GetService("ReplicatedStorage")
+if not (game.PlaceId == 6872274481 or game.PlaceId == 6872265039) then
+    pcall(function()
+        local startTime = tick()
+        while tick() - startTime < 12 do
+            if rep:FindFirstChild("TS") or rep:FindFirstChild("rbxts_include") then
+                break
+            end
+            task.wait(0.2)
+        end
+    end)
+end
 tweenservice = game:GetService("TweenService")
 uis = game:GetService("UserInputService")
 runservice = game:GetService("RunService")
-rep = game:GetService("ReplicatedStorage")
-plr = game:GetService("Players").LocalPlayer
 lighting = game:GetService("Lighting")
-cam = workspace.CurrentCamera
-players = game:GetService("Players")
 hide_bind = Enum.KeyCode.RightShift
 ww = 210
 spacing = 225
 local clientActive = true
+local fovCircleObj = nil
+local shaderCC = nil
+local shaderBloom = nil
 local ClientConnections = {
     _connections = {},
     _objects = {},
@@ -53,6 +118,27 @@ function ClientConnections.cleanup()
     end
     table.clear(ClientConnections._threads)
 end
+pcall(function()
+    local teleportConnection
+    teleportConnection = plr.OnTeleport:Connect(function(teleportState)
+        pcall(function()
+            clientActive = false
+            if getgenv().oldnamecall and hookmetamethod then
+                hookmetamethod(game, "__namecall", getgenv().oldnamecall)
+                getgenv().oldnamecall = nil
+            end
+            if ClientConnections and ClientConnections.cleanup then
+                ClientConnections.cleanup()
+            end
+            if unload then
+                unload()
+            end
+            if teleportConnection then
+                teleportConnection:Disconnect()
+            end
+        end)
+    end)
+end)
 active = {}; uiconns = {}; toggleRefs = {}
 moduleStates = {}; alLabels = {}; keybindOverrides = {}
 reachVal = 18; reachActive = false
@@ -90,6 +176,7 @@ getgenv().jdk = {
     antiHitHeight = 12,
     reapplyBooster = function()
         if not getgenv().fpsBoosterActive then return end
+        getgenv().originalProperties = getgenv().originalProperties or {}
         local lighting = game:GetService("Lighting")
         local function isEntityPart(part)
             local parent = part.Parent
@@ -959,415 +1046,457 @@ bw.placeBlock = function(pos, item)
     end
 end
 spawn(function()
+    local isMobileExecutor = false
+    local executorName = identifyexecutor and identifyexecutor() or ""
+    if type(executorName) == "string" then
+        local nameLower = executorName:lower()
+        if nameLower:find("cosmic") or nameLower:find("codex") or nameLower:find("delta") or nameLower:find("arceus") or nameLower:find("vegax") or nameLower:find("appleware") or nameLower:find("cubix") then
+            isMobileExecutor = true
+        end
+    end
+    local canUseGC = (getgc ~= nil) and (not isMobileExecutor)
     for i = 1, 100 do
-        for _, v in ipairs(rep:GetDescendants()) do
-            if v.Name == "KnitClient" and v:IsA("ModuleScript") then
-                local s2, kn = pcall(function() return require(v) end)
-                if s2 then
-                    bw.Knit = kn; knitok = true
-                    pcall(function()
-                        bw.Spring = kn.Controllers.SprintController or kn.Controllers.SprintingController
-                        bw.Sword = kn.Controllers.SwordController or kn.Controllers.WeaponController
-                        bw.Viewmodel = kn.Controllers.ViewmodelController
-                        bw.BlockBreak = kn.Controllers.BlockBreakController or kn.Controllers.BlockDestructionController
-                        bw.Balloon = kn.Controllers.BalloonController
-                        bw.ProjectileController = kn.Controllers.ProjectileController
-                        pcall(function()
-                             local CannonHandController = kn.Controllers.CannonHandController
-                             if CannonHandController then
-                                  getgenv().prehitCannons = getgenv().prehitCannons or {}
-                                  local CannonAimRemoteName = nil
-                                  pcall(function()
-                                      local CannonController = kn.Controllers.CannonController
-                                      if CannonController then
-                                          for name, func in pairs(CannonController) do
-                                              if type(func) == "function" then
-                                                  local ok, consts = pcall(debug.getconstants, func)
-                                                  if ok and consts then
-                                                      local ind = table.find(consts, "Client")
-                                                      if ind then
-                                                          CannonAimRemoteName = consts[ind + 1]
-                                                          break
-                                                      end
-                                                  end
-                                                  for i = 1, 10 do
-                                                      local ok2, proto = pcall(debug.getproto, func, i)
-                                                      if ok2 and proto then
-                                                          local ok3, consts2 = pcall(debug.getconstants, proto)
-                                                          if ok3 and consts2 then
-                                                              local ind2 = table.find(consts2, "Client")
-                                                              if ind2 then
-                                                                  CannonAimRemoteName = consts2[ind2 + 1]
-                                                                  break
-                                                              end
-                                                          end
-                                                      end
-                                                  end
-                                                  if CannonAimRemoteName then break end
-                                              end
-                                          end
-                                      end
-                                  end)
-                                  pcall(function()
-                                      local CannonController = kn.Controllers.CannonController
-                                      if CannonController then
-                                          if not getgenv().oldStartAiming then
-                                              getgenv().oldStartAiming = CannonController.startAiming
-                                              CannonController.startAiming = function(self, block, ...)
-                                                  local res = getgenv().oldStartAiming(self, block, ...)
-                                                  if moduleStates["cannon aimbot"] and block and getgenv().cannonWaypointPos then
-                                                      task.spawn(function()
-                                                          task.wait(0.1)
-                                                          getgenv().aimCannonAtWaypoint(block)
-                                                      end)
-                                                  end
-                                                  return res
-                                              end
-                                          end
-                                      end
-                                  end)
-                                  getgenv().CannonAimRemoteName = CannonAimRemoteName
-                                  getgenv().cannonWaypointPos = nil
-                                  getgenv().cannonWaypointVisual = nil
-                                  getgenv().aimedCannons = {}
-                                  getgenv().cannonLaunchSpeed = getgenv().cannonLaunchSpeed or 120
-                                  getgenv().aimCannonAtWaypoint = function(block)
-                                      if not block or not getgenv().cannonWaypointPos then return end
-                                      local pos
-                                      if typeof(block) == "Instance" then
-                                          pos = block:IsA("Model") and (block.PrimaryPart and block.PrimaryPart.Position or block:GetPivot().Position) or (block:IsA("BasePart") and block.Position)
-                                      elseif typeof(block) == "Vector3" then
-                                          pos = block
-                                      end
-                                      if not pos then return end
-                                      local blockpos = bw.getBlockPosition(pos)
-                                      local remoteName = getgenv().CannonAimRemoteName
-                                      if not remoteName then
-                                          pcall(function()
-                                              local CannonController = kn.Controllers.CannonController
-                                              if CannonController then
-                                                  for name, func in pairs(CannonController) do
-                                                      if type(func) == "function" then
-                                                          local ok, consts = pcall(debug.getconstants, func)
-                                                          if ok and consts then
-                                                              local ind = table.find(consts, "Client")
-                                                              if ind then
-                                                                  remoteName = consts[ind + 1]
-                                                                  break
-                                                              end
-                                                          end
-                                                          for i = 1, 10 do
-                                                              local ok2, proto = pcall(debug.getproto, func, i)
-                                                              if ok2 and proto then
-                                                                  local ok3, consts2 = pcall(debug.getconstants, proto)
-                                                                  if ok3 and consts2 then
-                                                                      local ind2 = table.find(consts2, "Client")
-                                                                      if ind2 then
-                                                                          remoteName = consts2[ind2 + 1]
-                                                                          break
-                                                                      end
-                                                                  end
-                                                              end
-                                                          end
-                                                          if remoteName then break end
-                                                      end
-                                                  end
-                                              end
-                                          end)
-                                          getgenv().CannonAimRemoteName = remoteName
-                                      end
-                                      if blockpos and remoteName then
-                                          local diff = getgenv().cannonWaypointPos - pos
-                                          local horizontalDist = Vector3.new(diff.X, 0, diff.Z).Magnitude
-                                          local v = getgenv().cannonLaunchSpeed
-                                          local g = workspace.Gravity
-                                          local d = horizontalDist
-                                          local y = diff.Y
-                                          local val = v^4 - g * (g * d^2 + 2 * y * v^2)
-                                          local angle
-                                          if val >= 0 and d > 0.1 then
-                                              angle = math.atan((v^2 - math.sqrt(val)) / (g * d))
-                                          else
-                                              angle = math.rad(45)
-                                          end
-                                          local dir2D = Vector3.new(diff.X, 0, diff.Z).Unit
-                                          local aimDir = dir2D * math.cos(angle) + Vector3.new(0, math.sin(angle), 0)
-                                          local lookVector = aimDir * 200
-                                          pcall(function()
-                                              local flamework = bw.Flamework or (rep.TS:FindFirstChild("remotes") and require(rep.TS.remotes).default.Client)
-                                              if flamework then
-                                                  flamework:Get(remoteName):SendToServer({
-                                                      cannonBlockPos = blockpos,
-                                                      lookVector = lookVector
-                                                  })
-                                              end
-                                          end)
-                                          pcall(function()
-                                              workspace.CurrentCamera.CFrame = CFrame.lookAt(workspace.CurrentCamera.CFrame.p, pos + aimDir * 10)
-                                          end)
-                                      end
-                                  end
-                                  getgenv().getCannonFromSeat = function(seat)
-                                      if not seat then return nil end
-                                      if seat.Name == "cannon" or seat:GetAttribute("BlockName") == "cannon" then
-                                          return seat
-                                      end
-                                      local p = seat.Parent
-                                      while p and p ~= workspace do
-                                          if p.Name == "cannon" or p:GetAttribute("BlockName") == "cannon" then
-                                              return p
-                                          end
-                                          p = p.Parent
-                                      end
-                                      return nil
-                                   end
-                                  getgenv().cannonNotify = function(text)
-                                      task.spawn(function()
-                                          local label = Instance.new("TextLabel")
-                                          label.Size = UDim2.new(0, 260, 0, 32)
-                                          label.Position = UDim2.new(0.5, -130, 0, -50)
-                                          label.BackgroundColor3 = c_colors.bg
-                                          label.BackgroundTransparency = 0.1
-                                          label.TextColor3 = c_colors.text
-                                          label.TextSize = 12
-                                          label.Font = Enum.Font.Montserrat
-                                          label.Text = text
-                                          label.BorderSizePixel = 0
-                                          label.Parent = gui
-                                          local corner = Instance.new("UICorner")
-                                          corner.CornerRadius = UDim.new(0, 6)
-                                          corner.Parent = label
-                                          local stroke = Instance.new("UIStroke")
-                                          stroke.Color = c_colors.outline
-                                          stroke.Thickness = 1
-                                          stroke.Parent = label
-                                          label:TweenPosition(UDim2.new(0.5, -130, 0.08, 0), "Out", "Quint", 0.4, true)
-                                          task.wait(2.2)
-                                          label:TweenPosition(UDim2.new(0.5, -130, 0, -50), "In", "Quint", 0.4, true)
-                                          task.wait(0.4)
-                                          label:Destroy()
-                                      end)
-                                  end
-                                  getgenv().createWaypointVisual = function(pos)
-                                      if getgenv().cannonWaypointVisual then
-                                          getgenv().cannonWaypointVisual:Destroy()
-                                      end
-                                      local folder = Instance.new("Folder")
-                                      folder.Name = "jdkclient_waypoint"
-                                      folder.Parent = workspace
-                                      local ring = Instance.new("Part")
-                                      ring.Shape = Enum.PartType.Cylinder
-                                      ring.Size = Vector3.new(0.2, 5, 5)
-                                      ring.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
-                                      ring.Anchored = true
-                                      ring.CanCollide = false
-                                      ring.Material = Enum.Material.Neon
-                                      ring.Color = c_colors.accent2
-                                      ring.Transparency = 0.4
-                                      ring.Parent = folder
-                                      local innerRing = Instance.new("Part")
-                                      innerRing.Shape = Enum.PartType.Cylinder
-                                      innerRing.Size = Vector3.new(0.25, 2.5, 2.5)
-                                      innerRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
-                                      innerRing.Anchored = true
-                                      innerRing.CanCollide = false
-                                      innerRing.Material = Enum.Material.Neon
-                                      innerRing.Color = c_colors.accent
-                                      innerRing.Transparency = 0.5
-                                      innerRing.Parent = folder
-                                      local bb = Instance.new("BillboardGui")
-                                      bb.Size = UDim2.new(0, 150, 0, 38)
-                                      bb.StudsOffset = Vector3.new(0, 3, 0)
-                                      bb.AlwaysOnTop = true
-                                      bb.Adornee = ring
-                                      bb.Parent = folder
-                                      local frame = Instance.new("Frame")
-                                      frame.Size = UDim2.new(1, 0, 1, 0)
-                                      frame.BackgroundColor3 = c_colors.bg
-                                      frame.BackgroundTransparency = 0.1
-                                      frame.BorderSizePixel = 0
-                                      frame.Parent = bb
-                                      local corner = Instance.new("UICorner")
-                                      corner.CornerRadius = UDim.new(0, 6)
-                                      corner.Parent = frame
-                                      local stroke = Instance.new("UIStroke")
-                                      stroke.Color = c_colors.outline
-                                      stroke.Thickness = 1
-                                      stroke.Parent = frame
-                                      local title = Instance.new("TextLabel")
-                                      title.Size = UDim2.new(1, 0, 0.5, 0)
-                                      title.BackgroundTransparency = 1
-                                      title.Text = "Cannon Target"
-                                      title.TextColor3 = c_colors.text
-                                      title.TextSize = 11
-                                      title.Font = Enum.Font.MontserratBold
-                                      title.Parent = frame
-                                      local distLabel = Instance.new("TextLabel")
-                                      distLabel.Size = UDim2.new(1, 0, 0.5, 0)
-                                      distLabel.Position = UDim2.new(0, 0, 0.5, 0)
-                                      distLabel.BackgroundTransparency = 1
-                                      distLabel.Text = "0m"
-                                      distLabel.TextColor3 = c_colors.accent2
-                                      distLabel.TextSize = 12
-                                      distLabel.Font = Enum.Font.Montserrat
-                                      distLabel.Parent = frame
-                                      task.spawn(function()
-                                          while folder.Parent do
-                                              local char = plr.Character
-                                              local hrp = char and char:FindFirstChild("HumanoidRootPart")
-                                              if hrp then
-                                                  local distance = math.round((hrp.Position - pos).Magnitude)
-                                                  distLabel.Text = tostring(distance) .. " studs"
-                                              end
-                                              task.wait(0.1)
-                                          end
-                                      end)
-                                      getgenv().cannonWaypointVisual = folder
-                                  end
-                                 local _cachedInvUtil = nil
-                                 local function getInvUtil()
-                                     if not _cachedInvUtil then pcall(function() _cachedInvUtil = require(rep.TS.inventory["inventory-util"]).InventoryUtil end) end
-                                     return _cachedInvUtil
-                                 end
-                                 getgenv().getWoodenPickaxe = function()
-                                     local success, res = pcall(function()
-                                         local inventoryutil = getInvUtil()
-                                         if not inventoryutil then return nil end
-                                         local inv = inventoryutil.getInventory(plr)
-                                         if inv and inv.items then
-                                             for _, item in ipairs(inv.items) do
-                                                 if string.find(item.itemType, "pickaxe") then
-                                                      return item
-                                                 end
-                                             end
-                                         end
-                                         return nil
-                                     end)
-                                     return success and res or nil
-                                 end
-                                 getgenv().switchItem = function(itemType)
-                                     pcall(function()
-                                         local inventoryutil = getInvUtil()
-                                         if not inventoryutil then return end
-                                         local inv = inventoryutil.getInventory(plr)
-                                         if inv and inv.items then
-                                             for _, item in ipairs(inv.items) do
-                                                 if item.itemType == itemType then
-                                                     local handCheck = plr.Character and plr.Character:FindFirstChild("HandInvItem")
-                                                     if handCheck and handCheck.Value ~= item.tool then
-                                                         local flamework = bw.Flamework or (rep.TS:FindFirstChild("remotes") and require(rep.TS.remotes).default.Client)
-                                                         if flamework then
-                                                             flamework:Get("EquipItem"):CallServerAsync({hand = item.tool})
-                                                         end
-                                                         handCheck.Value = item.tool
-                                                     end
-                                                     break
-                                                 end
-                                             end
-                                         end
-                                     end)
-                                 end
-                                  getgenv().damageBlockRemote = function(blockPos, itemType)
-                                      pcall(function()
-                                          local clientDmgBlock = require(rep['rbxts_include']['node_modules']['@easy-games']['block-engine'].out.shared.remotes).BlockEngineRemotes.Client:Get('DamageBlock')
-                                          if clientDmgBlock then
-                                              clientDmgBlock:CallServerAsync({
-                                                  blockRef = {blockPosition = blockPos},
-                                                  hitPosition = blockPos * 3,
-                                                  hitNormal = Vector3.FromNormalId(Enum.NormalId.Top),
-                                                  hitSource = itemType or "wood_pickaxe"
-                                              })
-                                          end
-                                      end)
-                                  end
-                                 getgenv().destroyBlockLocally = function(blockPos)
-                                     pcall(function()
-                                         local bdata = bw.getBlockAt(blockPos)
-                                         if bdata then
-                                             if typeof(bdata) == "Instance" then
-                                                 bdata:Destroy()
-                                             elseif typeof(bdata) == "table" and bdata.blockInstance then
-                                                 bdata.blockInstance:Destroy()
-                                             end
-                                         end
-                                         local worldPos = blockPos * 3
-                                         local parts = workspace:GetPartBoundsInBox(CFrame.new(worldPos), Vector3.new(3.1, 3.1, 3.1))
-                                         for _, p in ipairs(parts) do
-                                             if p.Name == "cannon" or p:GetAttribute("BlockName") == "cannon" then
-                                                 p:Destroy()
-                                             end
-                                         end
-                                     end)
-                                 end
-                                    local function performAssister(block)
-                                        local pickaxe = getgenv().getWoodenPickaxe()
-                                        if not pickaxe then return end
-                                        local pos
-                                        pcall(function()
-                                            if typeof(block) == "Instance" then
-                                                pos = block:IsA("BasePart") and block.Position or (block:IsA("Model") and (block.PrimaryPart and block.PrimaryPart.Position or block:GetPivot().Position))
-                                            end
-                                        end)
-                                        if not pos then return end
-                                        local blockPos = bw.getBlockPosition(pos)
-                                        if not blockPos then return end
-                                        task.wait(0.05)
-                                        getgenv().switchItem(pickaxe.itemType)
-                                        for i = 1, 2 do
-                                            task.spawn(function()
-                                                pcall(function()
-                                                    getgenv().damageBlockRemote(blockPos, pickaxe.itemType)
-                                                end)
-                                            end)
-                                        end
-                                    end
-                                  local oldLaunch = CannonHandController.launchSelf
-                                  CannonHandController.launchSelf = function(self, block)
-                                      local res = oldLaunch(self, block)
-                                      if moduleStates["cannon assister"] and block then
-                                          task.spawn(performAssister, block)
-                                      end
-                                      if moduleStates["cannon aimbot"] then
-                                          pcall(function()
-                                              local hum = plr.Character and plr.Character:FindFirstChild("Humanoid")
-                                              if hum then
-                                                  task.spawn(function()
-                                                      task.wait(0.05)
-                                                      hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                                                  end)
-                                              end
-                                          end)
-                                      end
-                                      return res
-                                  end
-                             end
-                         end)
-                        for name, controller in pairs(kn.Controllers) do
-                            local ln = string.lower(name)
-                            if string.find(ln, "placement") or string.find(ln, "placer") then
-                                bw.BlockPlacerController = controller
-                            end
-                            if string.find(ln, "hand") or string.find(ln, "inventory") then
-                                bw.HandController = controller
-                            end
-                        end
-                        bw.CombatConstant = require(rep.TS.combat["combat-constant"]).CombatConstant
-                        bw.ItemMeta = debug.getupvalue(require(rep.TS.item["item-meta"]).getItemMeta, 1) or {}
-                        pcall(function() bw.Flamework = require(rep.TS.remotes).default.Client end)
-                        pcall(function() bw.KB = require(rep.TS.damage["knockback-util"]).KnockbackUtil end)
-                        pcall(function()
-                            bw.BlockController = require(rep["rbxts_include"]["node_modules"]["@easy-games"]["block-engine"].out).BlockEngine
-                            bw.BlockEngine = require(plr.PlayerScripts.TS.lib["block-engine"]["client-block-engine"]).ClientBlockEngine
-                            bw.BlockPlacer = require(rep["rbxts_include"]["node_modules"]["@easy-games"]["block-engine"].out.client.placement["block-placer"]).BlockPlacer
-                            bw.blockplacerinst = bw.BlockPlacer.new(bw.BlockEngine, "wool_white")
-                        end)
-                    end)
+        local foundKnitScript = nil
+        local tsKnit = plr:FindFirstChild("PlayerScripts")
+            and plr.PlayerScripts:FindFirstChild("TS")
+            and plr.PlayerScripts.TS:FindFirstChild("knit")
+        if tsKnit and tsKnit:IsA("ModuleScript") then
+            foundKnitScript = tsKnit
+        else
+            for _, v in ipairs(rep:GetDescendants()) do
+                if v.Name == "KnitClient" and v:IsA("ModuleScript") then
+                    foundKnitScript = v
+                    break
                 end
             end
         end
-        if not knitok and i % 4 == 0 then
+        if foundKnitScript then
+            local s2, kn = pcall(function() return require(foundKnitScript) end)
+            if s2 then
+                bw.Knit = kn; knitok = true
+                pcall(function()
+                    bw.Spring = kn.Controllers.SprintController or kn.Controllers.SprintingController
+                    bw.Sword = kn.Controllers.SwordController or kn.Controllers.WeaponController
+                    bw.Viewmodel = kn.Controllers.ViewmodelController
+                    bw.BlockBreak = kn.Controllers.BlockBreakController or kn.Controllers.BlockDestructionController
+                    bw.Balloon = kn.Controllers.BalloonController
+                    bw.ProjectileController = kn.Controllers.ProjectileController
+                    pcall(function()
+                        local CannonHandController = kn.Controllers.CannonHandController
+                        if CannonHandController then
+                            getgenv().prehitCannons = getgenv().prehitCannons or {}
+                            local CannonAimRemoteName = nil
+                            pcall(function()
+                                local CannonController = kn.Controllers.CannonController
+                                if CannonController then
+                                    for name, func in pairs(CannonController) do
+                                        if type(func) == "function" then
+                                            local ok, consts = false, nil
+                                            if debug and debug.getconstants then
+                                                ok, consts = pcall(debug.getconstants, func)
+                                            end
+                                            if ok and consts then
+                                                local ind = table.find(consts, "Client")
+                                                if ind then
+                                                    CannonAimRemoteName = consts[ind + 1]
+                                                    break
+                                                end
+                                            end
+                                            for j = 1, 10 do
+                                                local ok2, proto = false, nil
+                                                if debug and debug.getproto then
+                                                    ok2, proto = pcall(debug.getproto, func, j)
+                                                end
+                                                if ok2 and proto then
+                                                    local ok3, consts2 = false, nil
+                                                    if debug and debug.getconstants then
+                                                        ok3, consts2 = pcall(debug.getconstants, proto)
+                                                    end
+                                                    if ok3 and consts2 then
+                                                        local ind2 = table.find(consts2, "Client")
+                                                        if ind2 then
+                                                            CannonAimRemoteName = consts2[ind2 + 1]
+                                                            break
+                                                        end
+                                                    end
+                                                end
+                                            end
+                                            if CannonAimRemoteName then break end
+                                        end
+                                    end
+                                end
+                            end)
+                            pcall(function()
+                                local CannonController = kn.Controllers.CannonController
+                                if CannonController then
+                                    if not getgenv().oldStartAiming then
+                                        getgenv().oldStartAiming = CannonController.startAiming
+                                        CannonController.startAiming = function(self, block, ...)
+                                            local res = getgenv().oldStartAiming(self, block, ...)
+                                            if moduleStates["cannon aimbot"] and block and getgenv().cannonWaypointPos then
+                                                task.spawn(function()
+                                                    task.wait(0.1)
+                                                    getgenv().aimCannonAtWaypoint(block)
+                                                end)
+                                            end
+                                            return res
+                                        end
+                                    end
+                                end
+                            end)
+                            getgenv().CannonAimRemoteName = CannonAimRemoteName
+                            getgenv().cannonWaypointPos = nil
+                            getgenv().cannonWaypointVisual = nil
+                            getgenv().aimedCannons = {}
+                            getgenv().cannonLaunchSpeed = getgenv().cannonLaunchSpeed or 120
+                            getgenv().aimCannonAtWaypoint = function(block)
+                                if not block or not getgenv().cannonWaypointPos then return end
+                                local pos
+                                if typeof(block) == "Instance" then
+                                    pos = block:IsA("Model") and (block.PrimaryPart and block.PrimaryPart.Position or block:GetPivot().Position) or (block:IsA("BasePart") and block.Position)
+                                elseif typeof(block) == "Vector3" then
+                                    pos = block
+                                end
+                                if not pos then return end
+                                local blockpos = bw.getBlockPosition(pos)
+                                local remoteName = getgenv().CannonAimRemoteName
+                                if not remoteName then
+                                    pcall(function()
+                                        local CannonController = kn.Controllers.CannonController
+                                        if CannonController then
+                                            for name, func in pairs(CannonController) do
+                                                if type(func) == "function" then
+                                                    local ok, consts = false, nil
+                                                    if debug and debug.getconstants then
+                                                        ok, consts = pcall(debug.getconstants, func)
+                                                    end
+                                                    if ok and consts then
+                                                        local ind = table.find(consts, "Client")
+                                                        if ind then
+                                                            remoteName = consts[ind + 1]
+                                                            break
+                                                        end
+                                                    end
+                                                    for j = 1, 10 do
+                                                        local ok2, proto = false, nil
+                                                        if debug and debug.getproto then
+                                                            ok2, proto = pcall(debug.getproto, func, j)
+                                                        end
+                                                        if ok2 and proto then
+                                                            local ok3, consts2 = false, nil
+                                                            if debug and debug.getconstants then
+                                                                ok3, consts2 = pcall(debug.getconstants, proto)
+                                                            end
+                                                            if ok3 and consts2 then
+                                                                local ind2 = table.find(consts2, "Client")
+                                                                if ind2 then
+                                                                    remoteName = consts2[ind2 + 1]
+                                                                    break
+                                                                end
+                                                            end
+                                                        end
+                                                    end
+                                                    if remoteName then break end
+                                                end
+                                            end
+                                        end
+                                    end)
+                                    getgenv().CannonAimRemoteName = remoteName
+                                end
+                                if blockpos and remoteName then
+                                    local diff = getgenv().cannonWaypointPos - pos
+                                    local horizontalDist = Vector3.new(diff.X, 0, diff.Z).Magnitude
+                                    local v = getgenv().cannonLaunchSpeed
+                                    local g = workspace.Gravity
+                                    local d = horizontalDist
+                                    local y = diff.Y
+                                    local val = v^4 - g * (g * d^2 + 2 * y * v^2)
+                                    local angle
+                                    if val >= 0 and d > 0.1 then
+                                        angle = math.atan((v^2 - math.sqrt(val)) / (g * d))
+                                    else
+                                        angle = math.rad(45)
+                                    end
+                                    local dir2D = Vector3.new(diff.X, 0, diff.Z).Unit
+                                    local aimDir = dir2D * math.cos(angle) + Vector3.new(0, math.sin(angle), 0)
+                                    local lookVector = aimDir * 200
+                                    pcall(function()
+                                        local flamework = bw.Flamework or (rep.TS:FindFirstChild("remotes") and require(rep.TS.remotes).default.Client)
+                                        if flamework then
+                                            flamework:Get(remoteName):SendToServer({
+                                                cannonBlockPos = blockpos,
+                                                lookVector = lookVector
+                                            })
+                                        end
+                                    end)
+                                    pcall(function()
+                                        workspace.CurrentCamera.CFrame = CFrame.lookAt(workspace.CurrentCamera.CFrame.p, pos + aimDir * 10)
+                                    end)
+                                end
+                            end
+                            getgenv().getCannonFromSeat = function(seat)
+                                if not seat then return nil end
+                                if seat.Name == "cannon" or seat:GetAttribute("BlockName") == "cannon" then
+                                    return seat
+                                end
+                                local p = seat.Parent
+                                while p and p ~= workspace do
+                                    if p.Name == "cannon" or p:GetAttribute("BlockName") == "cannon" then
+                                        return p
+                                    end
+                                    p = p.Parent
+                                end
+                                return nil
+                            end
+                            getgenv().cannonNotify = function(text)
+                                task.spawn(function()
+                                    local label = Instance.new("TextLabel")
+                                    label.Size = UDim2.new(0, 260, 0, 32)
+                                    label.Position = UDim2.new(0.5, -130, 0, -50)
+                                    label.BackgroundColor3 = c_colors.bg
+                                    label.BackgroundTransparency = 0.1
+                                    label.TextColor3 = c_colors.text
+                                    label.TextSize = 12
+                                    label.Font = Enum.Font.Montserrat
+                                    label.Text = text
+                                    label.BorderSizePixel = 0
+                                    label.Parent = gui
+                                    local corner = Instance.new("UICorner")
+                                    corner.CornerRadius = UDim.new(0, 6)
+                                    corner.Parent = label
+                                    local stroke = Instance.new("UIStroke")
+                                    stroke.Color = c_colors.outline
+                                    stroke.Thickness = 1
+                                    stroke.Parent = label
+                                    label:TweenPosition(UDim2.new(0.5, -130, 0.08, 0), "Out", "Quint", 0.4, true)
+                                    task.wait(2.2)
+                                    label:TweenPosition(UDim2.new(0.5, -130, 0, -50), "In", "Quint", 0.4, true)
+                                    task.wait(0.4)
+                                    label:Destroy()
+                                end)
+                            end
+                            getgenv().createWaypointVisual = function(pos)
+                                if getgenv().cannonWaypointVisual then
+                                    getgenv().cannonWaypointVisual:Destroy()
+                                end
+                                local folder = Instance.new("Folder")
+                                folder.Name = "jdkclient_waypoint"
+                                folder.Parent = workspace
+                                local ring = Instance.new("Part")
+                                ring.Shape = Enum.PartType.Cylinder
+                                ring.Size = Vector3.new(0.2, 5, 5)
+                                ring.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+                                ring.Anchored = true
+                                ring.CanCollide = false
+                                ring.Material = Enum.Material.Neon
+                                ring.Color = c_colors.accent2
+                                ring.Transparency = 0.4
+                                ring.Parent = folder
+                                local innerRing = Instance.new("Part")
+                                innerRing.Shape = Enum.PartType.Cylinder
+                                innerRing.Size = Vector3.new(0.25, 2.5, 2.5)
+                                innerRing.CFrame = CFrame.new(pos) * CFrame.Angles(0, 0, math.rad(90))
+                                innerRing.Anchored = true
+                                innerRing.CanCollide = false
+                                innerRing.Material = Enum.Material.Neon
+                                innerRing.Color = c_colors.accent
+                                innerRing.Transparency = 0.5
+                                innerRing.Parent = folder
+                                local bb = Instance.new("BillboardGui")
+                                bb.Size = UDim2.new(0, 150, 0, 38)
+                                bb.StudsOffset = Vector3.new(0, 3, 0)
+                                bb.AlwaysOnTop = true
+                                bb.Adornee = ring
+                                bb.Parent = folder
+                                local frame = Instance.new("Frame")
+                                frame.Size = UDim2.new(1, 0, 1, 0)
+                                frame.BackgroundColor3 = c_colors.bg
+                                frame.BackgroundTransparency = 0.1
+                                frame.BorderSizePixel = 0
+                                frame.Parent = bb
+                                local corner = Instance.new("UICorner")
+                                corner.CornerRadius = UDim.new(0, 6)
+                                corner.Parent = frame
+                                local stroke = Instance.new("UIStroke")
+                                stroke.Color = c_colors.outline
+                                stroke.Thickness = 1
+                                stroke.Parent = frame
+                                local title = Instance.new("TextLabel")
+                                title.Size = UDim2.new(1, 0, 0.5, 0)
+                                title.BackgroundTransparency = 1
+                                title.Text = "Cannon Target"
+                                title.TextColor3 = c_colors.text
+                                title.TextSize = 11
+                                title.Font = Enum.Font.MontserratBold
+                                title.Parent = frame
+                                local distLabel = Instance.new("TextLabel")
+                                distLabel.Size = UDim2.new(1, 0, 0.5, 0)
+                                distLabel.Position = UDim2.new(0, 0, 0.5, 0)
+                                distLabel.BackgroundTransparency = 1
+                                distLabel.Text = "0m"
+                                distLabel.TextColor3 = c_colors.accent2
+                                distLabel.TextSize = 12
+                                distLabel.Font = Enum.Font.Montserrat
+                                distLabel.Parent = frame
+                                task.spawn(function()
+                                    while folder.Parent do
+                                        local char = plr.Character
+                                        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                                        if hrp then
+                                            local distance = math.round((hrp.Position - pos).Magnitude)
+                                            distLabel.Text = tostring(distance) .. " studs"
+                                        end
+                                        task.wait(0.1)
+                                    end
+                                end)
+                                getgenv().cannonWaypointVisual = folder
+                            end
+                            local _cachedInvUtil = nil
+                            local function getInvUtil()
+                                if not _cachedInvUtil then pcall(function() _cachedInvUtil = require(rep.TS.inventory["inventory-util"]).InventoryUtil end) end
+                                return _cachedInvUtil
+                            end
+                            getgenv().getWoodenPickaxe = function()
+                                local success, res = pcall(function()
+                                    local inventoryutil = getInvUtil()
+                                    if not inventoryutil then return nil end
+                                    local inv = inventoryutil.getInventory(plr)
+                                    if inv and inv.items then
+                                        for _, item in ipairs(inv.items) do
+                                            if string.find(item.itemType, "pickaxe") then
+                                                return item
+                                            end
+                                        end
+                                    end
+                                    return nil
+                                end)
+                                return success and res or nil
+                            end
+                            getgenv().switchItem = function(itemType)
+                                pcall(function()
+                                    local inventoryutil = getInvUtil()
+                                    if not inventoryutil then return end
+                                    local inv = inventoryutil.getInventory(plr)
+                                    if inv and inv.items then
+                                        for _, item in ipairs(inv.items) do
+                                            if item.itemType == itemType then
+                                                local handCheck = plr.Character and plr.Character:FindFirstChild("HandInvItem")
+                                                if handCheck and handCheck.Value ~= item.tool then
+                                                    local flamework = bw.Flamework or (rep.TS:FindFirstChild("remotes") and require(rep.TS.remotes).default.Client)
+                                                    if flamework then
+                                                        flamework:Get("EquipItem"):CallServerAsync({hand = item.tool})
+                                                    end
+                                                    handCheck.Value = item.tool
+                                                end
+                                                break
+                                            end
+                                        end
+                                    end
+                                end)
+                            end
+                            getgenv().damageBlockRemote = function(blockPos, itemType)
+                                pcall(function()
+                                    local clientDmgBlock = require(rep['rbxts_include']['node_modules']['@easy-games']['block-engine'].out.shared.remotes).BlockEngineRemotes.Client:Get('DamageBlock')
+                                    if clientDmgBlock then
+                                        clientDmgBlock:CallServerAsync({
+                                            blockRef = {blockPosition = blockPos},
+                                            hitPosition = blockPos * 3,
+                                            hitNormal = Vector3.FromNormalId(Enum.NormalId.Top),
+                                            hitSource = itemType or "wood_pickaxe"
+                                        })
+                                    end
+                                end)
+                            end
+                            getgenv().destroyBlockLocally = function(blockPos)
+                                pcall(function()
+                                    local bdata = bw.getBlockAt(blockPos)
+                                    if bdata then
+                                        if typeof(bdata) == "Instance" then
+                                            bdata:Destroy()
+                                        elseif typeof(bdata) == "table" and bdata.blockInstance then
+                                            bdata.blockInstance:Destroy()
+                                        end
+                                    end
+                                    local worldPos = blockPos * 3
+                                    local parts = workspace:GetPartBoundsInBox(CFrame.new(worldPos), Vector3.new(3.1, 3.1, 3.1))
+                                    for _, p in ipairs(parts) do
+                                        if p.Name == "cannon" or p:GetAttribute("BlockName") == "cannon" then
+                                            p:Destroy()
+                                        end
+                                    end
+                                end)
+                            end
+                            local function performAssister(block)
+                                local pickaxe = getgenv().getWoodenPickaxe()
+                                if not pickaxe then return end
+                                local pos
+                                pcall(function()
+                                    if typeof(block) == "Instance" then
+                                        pos = block:IsA("BasePart") and block.Position or (block:IsA("Model") and (block.PrimaryPart and block.PrimaryPart.Position or block:GetPivot().Position))
+                                    end
+                                end)
+                                if not pos then return end
+                                local blockPos = bw.getBlockPosition(pos)
+                                if not blockPos then return end
+                                task.wait(0.05)
+                                getgenv().switchItem(pickaxe.itemType)
+                                for j = 1, 2 do
+                                    task.spawn(function()
+                                        pcall(function()
+                                            getgenv().damageBlockRemote(blockPos, pickaxe.itemType)
+                                        end)
+                                    end)
+                                end
+                            end
+                            local oldLaunch = CannonHandController.launchSelf
+                            CannonHandController.launchSelf = function(self, block)
+                                local res = oldLaunch(self, block)
+                                if moduleStates["cannon assister"] and block then
+                                    task.spawn(performAssister, block)
+                                end
+                                if moduleStates["cannon aimbot"] then
+                                    pcall(function()
+                                        local hum = plr.Character and plr.Character:FindFirstChild("Humanoid")
+                                        if hum then
+                                            task.spawn(function()
+                                                task.wait(0.05)
+                                                hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                                            end)
+                                        end
+                                    end)
+                                end
+                                return res
+                            end
+                        end
+                    end)
+                    for name, controller in pairs(kn.Controllers) do
+                        local ln = string.lower(name)
+                        if string.find(ln, "placement") or string.find(ln, "placer") then
+                            bw.BlockPlacerController = controller
+                        end
+                        if string.find(ln, "hand") or string.find(ln, "inventory") then
+                            bw.HandController = controller
+                        end
+                    end
+                    bw.CombatConstant = require(rep.TS.combat["combat-constant"]).CombatConstant
+                    bw.ItemMeta = (debug and debug.getupvalue and debug.getupvalue(require(rep.TS.item["item-meta"]).getItemMeta, 1)) or {}
+                    pcall(function() bw.Flamework = require(rep.TS.remotes).default.Client end)
+                    pcall(function() bw.KB = require(rep.TS.damage["knockback-util"]).KnockbackUtil end)
+                    pcall(function()
+                        bw.BlockController = require(rep["rbxts_include"]["node_modules"]["@easy-games"]["block-engine"].out).BlockEngine
+                        bw.BlockEngine = require(plr.PlayerScripts.TS.lib["block-engine"]["client-block-engine"]).ClientBlockEngine
+                        bw.BlockPlacer = require(rep["rbxts_include"]["node_modules"]["@easy-games"]["block-engine"].out.client.placement["block-placer"]).BlockPlacer
+                        bw.blockplacerinst = bw.BlockPlacer.new(bw.BlockEngine, "wool_white")
+                    end)
+                end)
+            end
+        end
+        if not knitok and i % 10 == 0 and canUseGC then
             pcall(function()
                 for _, v in ipairs(getgc(true)) do
+                    if bw.Sword and bw.Spring and bw.BlockPlacerController and bw.ProjectileController and bw.HandController then
+                        break
+                    end
                     if type(v) == "table" then
                         if rawget(v, "swingSwordAtMouse") and not bw.Sword then bw.Sword = v; knitok = true end
                         if rawget(v, "startSprinting") and not bw.Spring then bw.Spring = v end
@@ -1380,7 +1509,7 @@ spawn(function()
             if knitok then
                 pcall(function()
                     bw.CombatConstant = require(rep.TS.combat["combat-constant"]).CombatConstant
-                    bw.ItemMeta = debug.getupvalue(require(rep.TS.item["item-meta"]).getItemMeta, 1) or {}
+                    bw.ItemMeta = (debug and debug.getupvalue and debug.getupvalue(require(rep.TS.item["item-meta"]).getItemMeta, 1)) or {}
                     pcall(function() bw.Flamework = require(rep.TS.remotes).default.Client end)
                     pcall(function() bw.KB = require(rep.TS.damage["knockback-util"]).KnockbackUtil end)
                     pcall(function()
@@ -1398,63 +1527,79 @@ spawn(function()
 end)
 pcall(function()
     if getgenv().oldnamecall then
-        hookmetamethod(game, "__namecall", getgenv().oldnamecall)
+        if hookmetamethod then
+            hookmetamethod(game, "__namecall", getgenv().oldnamecall)
+        end
         getgenv().oldnamecall = nil
     end
-    getgenv().oldnamecall = hookmetamethod(game, "__namecall", function(self, ...)
-        local method = getnamecallmethod()
-        if not checkcaller() and (method == "FireServer" or method == "InvokeServer") then
-            local args = {...}
-            local block = false
-            pcall(function()
-                if typeof(self) == "Instance" then
-                    if active["no fall"] and (self.Name == "GroundHit" or self.Name == "FallDamage") then
-                        block = true
-                    end
-                    if type(args[1]) == "table" then
-                        if args[1].weapon and args[1].validate then
-                            getgenv().SwordHitRemote = self
-                            if reachActive and reachSwordEnabled and args[1].validate then
-                                local vd = args[1].validate
-                                if vd.selfPosition and vd.targetPosition and vd.selfPosition.value and vd.targetPosition.value then
-                                    local sp = vd.selfPosition.value
-                                    local tp = vd.targetPosition.value
-                                    local dist = (tp - sp).Magnitude
-                                    if dist > 14.4 and dist <= (reachSwordRange or 18) then
-                                        local dir = (tp - sp).Unit
-                                        vd.selfPosition.value = sp + dir * (dist - 14.39)
-                                        if vd.raycast and vd.raycast.cameraPosition then
-                                            vd.raycast.cameraPosition.value = vd.selfPosition.value + Vector3.new(0, 1.5, 0)
+    if hookmetamethod then
+        local oldnamecall
+        oldnamecall = hookmetamethod(game, "__namecall", function(self, ...)
+            if not clientActive then
+                if oldnamecall then
+                    return oldnamecall(self, ...)
+                end
+                return
+            end
+            local method = getnamecallmethod()
+            if not checkcaller() and (method == "FireServer" or method == "InvokeServer") then
+                local args = {...}
+                local block = false
+                pcall(function()
+                    if typeof(self) == "Instance" then
+                        if active["no fall"] and (self.Name == "GroundHit" or self.Name == "FallDamage") then
+                            block = true
+                        end
+                        if type(args[1]) == "table" then
+                            if args[1].weapon and args[1].validate then
+                                getgenv().SwordHitRemote = self
+                                if reachActive and reachSwordEnabled and args[1].validate then
+                                    local vd = args[1].validate
+                                    if vd.selfPosition and vd.targetPosition and vd.selfPosition.value and vd.targetPosition.value then
+                                        local sp = vd.selfPosition.value
+                                        local tp = vd.targetPosition.value
+                                        local dist = (tp - sp).Magnitude
+                                        if dist > 14.4 and dist <= (reachSwordRange or 18) then
+                                            local dir = (tp - sp).Unit
+                                            vd.selfPosition.value = sp + dir * (dist - 14.39)
+                                            if vd.raycast and vd.raycast.cameraPosition then
+                                                vd.raycast.cameraPosition.value = vd.selfPosition.value + Vector3.new(0, 1.5, 0)
+                                            end
                                         end
                                     end
                                 end
+                            elseif args[1].blockType and args[1].position then
+                                getgenv().PlaceBlockRemote = self
                             end
-                        elseif args[1].blockType and args[1].position then
-                            getgenv().PlaceBlockRemote = self
                         end
-                    end
-                    if self.Name == "ProjectileFire" or self.Name == "FireProjectile" or string.find(self.Name, "Projectile") then
-                        if active["bowaimbot"] then
-                            local t = nearest(300, false)
-                            if t and t.hrp then
-                                local targetpos = t.hrp.Position + (t.hrp.Velocity * 0.1) + Vector3.new(0, 1.5, 0)
-                                local pos = type(args[1]) == "table" and args[1].position or args[4] or cam.CFrame.Position
-                                local targetdir = pos and (targetpos - pos).Magnitude > 0 and CFrame.lookAt(pos, targetpos).LookVector or Vector3.new(0,0,0)
-                                if type(args[1]) == "table" and typeof(args[1].velocity) == "Vector3" then
-                                    args[1].velocity = targetdir * args[1].velocity.Magnitude
-                                elseif typeof(args[6]) == "Vector3" then
-                                    args[6] = targetdir * args[6].Magnitude
+                        if self.Name == "ProjectileFire" or self.Name == "FireProjectile" or string.find(self.Name, "Projectile") then
+                            if active["bowaimbot"] then
+                                local t = nearest(300, false)
+                                if t and t.hrp then
+                                    local targetpos = t.hrp.Position + (t.hrp.Velocity * 0.1) + Vector3.new(0, 1.5, 0)
+                                    local pos = type(args[1]) == "table" and args[1].position or args[4] or cam.CFrame.Position
+                                    local targetdir = pos and (targetpos - pos).Magnitude > 0 and CFrame.lookAt(pos, targetpos).LookVector or Vector3.new(0,0,0)
+                                    if type(args[1]) == "table" and typeof(args[1].velocity) == "Vector3" then
+                                        args[1].velocity = targetdir * args[1].velocity.Magnitude
+                                    elseif typeof(args[6]) == "Vector3" then
+                                        args[6] = targetdir * args[6].Magnitude
+                                    end
                                 end
                             end
                         end
                     end
+                end)
+                if block then return end
+                if oldnamecall then
+                    return oldnamecall(self, unpack(args, 1, select("#", ...)))
                 end
-            end)
-            if block then return end
-            return getgenv().oldnamecall(self, unpack(args, 1, select("#", ...)))
-        end
-        return getgenv().oldnamecall(self, ...)
-    end)
+            end
+            if oldnamecall then
+                return oldnamecall(self, ...)
+            end
+        end)
+        getgenv().oldnamecall = oldnamecall
+    end
 end)
 local function attackEntity(targetChar, sword, customReach)
     if not targetChar or not sword then return end
@@ -2578,7 +2723,14 @@ local function createtoggle(cont, data)
     end
     return {get=function() return state end, toggle=dotoggle, set=setvis}
 end
-local espon = false; local espc = {}; local espo = {}; local used = pcall(function() return Drawing.new end)
+local espon = false; local espc = {}; local espo = {}; local used = false
+pcall(function()
+    local d = Drawing.new("Line")
+    if d and d.Remove then
+        d:Remove()
+        used = true
+    end
+end)
 local esp = {box = true, corner = true, boxc = Color3.fromRGB(255,255,255), boxt = 1.5, hbar = true, hbarw = 3, hoff = -7, nm = true, nmc = Color3.fromRGB(255,255,255), dist = true, distc = Color3.fromRGB(180,180,200), hotbar = true, hotc = Color3.fromRGB(200,200,220), ores = true, orec = Color3.fromRGB(200,200,220), maxd = 500, textsize = 13, teamCheck = true, skeleton = false}
 local ESP = esp
 local r6joints = {
@@ -3165,7 +3317,7 @@ local function togglechestesp(state)
         table.clear(chesthighlights)
     end
 end
-local function unload()
+function unload()
     clientActive = false
     if getgenv().vmConnection then
         pcall(function() getgenv().vmConnection:Disconnect() end)
@@ -3181,7 +3333,7 @@ local function unload()
         end
     end
     task.wait(0.15)
-    if getgenv().oldnamecall then
+    if getgenv().oldnamecall and hookmetamethod then
         pcall(function() hookmetamethod(game, "__namecall", getgenv().oldnamecall) end)
         getgenv().oldnamecall = nil
     end
@@ -3306,9 +3458,7 @@ local spiderSpd = 30
 local stealerOn = false
 local worldModOn = false
 local snowOn = false
-local fovCircleObj = nil
 local capeId = "13374270273"
-local shaderCC = nil; local shaderBloom = nil
 local kaEnabled = true
 local kaLegitAim = false
 local kaBlatant = true
@@ -3905,7 +4055,7 @@ local features = {
             {type="toggle", name="visibility check", default=false, callback=function(v) abVis=v end},
             {type="toggle", name="team check", default=true, callback=function(v) abTeamCheck=v end},
             {type="toggle", name="fov circle", default=false, callback=function(v)
-                if not fovCircleObj and pcall(function() return Drawing.new end) then
+                if not fovCircleObj and used then
                     fovCircleObj = Drawing.new("Circle")
                     fovCircleObj.Thickness = 1
                     fovCircleObj.Color = c_colors.accent
@@ -6844,12 +6994,12 @@ do
     local sortedNames = {}
     local function addSeenPlayer(p)
         local changed = false
-        if p.Name and p.Name ~= "" and not seenNamesMap[p.Name] then 
+        if p.Name and p.Name ~= "" and not seenNamesMap[p.Name] then
             seenNamesMap[p.Name] = p
             table.insert(sortedNames, p.Name)
             changed = true
         end
-        if p.DisplayName and p.DisplayName ~= "" and not seenNamesMap[p.DisplayName] then 
+        if p.DisplayName and p.DisplayName ~= "" and not seenNamesMap[p.DisplayName] then
             seenNamesMap[p.DisplayName] = p
             table.insert(sortedNames, p.DisplayName)
             changed = true

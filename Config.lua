@@ -80,4 +80,4 @@ if not s then warn("jdkclient failed to load: " .. tostring(r)) end]]
             matchConfigName = val
             saveAutoConfigSettings()
         end}
-    }}
+    }
